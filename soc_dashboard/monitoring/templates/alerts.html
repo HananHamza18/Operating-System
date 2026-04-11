@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Security Alerts</title>
+</head>
+<body style="background:#111;color:#eee;font-family:Arial">
+
+<h1>🚨 High Severity Alerts</h1>
+
+<table border="1" cellpadding="5">
+<tr>
+    <th>Time</th>
+    <th>Source</th>
+    <th>Message</th>
+</tr>
+{% for alert in alerts %}
+<tr>
+    <td>{{ alert.timestamp }}</td>
+    <td>{{ alert.source }}</td>
+    <td>{{ alert.message }}</td>
+</tr>
+{% endfor %}
+</table>
+
+<a href="/">Back to Dashboard</a>
+
+</body>
+</html>

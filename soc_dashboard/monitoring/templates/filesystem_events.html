@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Filesystem Monitoring</title>
+    <style>
+        body {
+            background-color: #0f172a;
+            color: #e5e7eb;
+            font-family: Arial;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 10px;
+            border-bottom: 1px solid #334155;
+        }
+        th {
+            background-color: #020617;
+        }
+        .HIGH { color: #ef4444; }
+        .MEDIUM { color: #facc15; }
+        .LOW { color: #22c55e; }
+    </style>
+</head>
+<body>
+
+<h2>📁 Filesystem Activity & Alerts</h2>
+
+<table>
+    <tr>
+        <th>Time</th>
+        <th>Event</th>
+        <th>Source</th>
+        <th>Details</th>
+        <th>Severity</th>
+    </tr>
+
+    {% for event in events %}
+    <tr>
+        <td>{{ event.timestamp }}</td>
+        <td>{{ event.event_type }}</td>
+        <td>{{ event.source }}</td>
+        <td>{{ event.message }}</td>
+        <td class="{{ event.severity }}">{{ event.severity }}</td>
+    </tr>
+    {% endfor %}
+
+</table>
+
+</body>
+</html>
