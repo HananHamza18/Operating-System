@@ -1,86 +1,122 @@
+{% load static %}
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SOC Dashboard</title>
-    <style>
-        body {
-            background-color: #020617;
-            color: #e5e7eb;
-            font-family: Arial;
-        }
-        .card {
-            background-color: #0f172a;
-            padding: 20px;
-            margin: 15px;
-            border-radius: 10px;
-            display: inline-block;
-            width: 22%;
-            vertical-align: top;
-        }
-        .HIGH { color: #ef4444; }
-        .MEDIUM { color: #facc15; }
-        .LOW { color: #22c55e; }
-        a {
-            color: #38bdf8;
-            text-decoration: none;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 20px;
-        }
-        th, td {
-            padding: 10px;
-            border-bottom: 1px solid #334155;
-        }
-    </style>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
 </head>
 <body>
 
-<h1>🛡️ SOC Security Dashboard</h1>
+<!-- ── Navigation ── -->
+<nav class="nav">
+    <a href="/" class="nav-brand">SOC MONITOR</a>
+    <a href="/" class="nav-link active">Dashboard</a>
+    <a href="/auth/" class="nav-link">Auth</a>
+    <a href="/processes/" class="nav-link">Processes</a>
+    <a href="/filesystem/" class="nav-link">Filesystem</a>
+    <a href="/timeline/" class="nav-link">Timeline</a>
+</nav>
 
-<div class="card">
-    <h3>Total Events</h3>
-    <h2>{{ total_events }}</h2>
+<!-- ── Page ── -->
+<div class="page">
+
+    <div class="page-header">
+        <h1 class="page-title"><span>▸</span> SECURITY OVERVIEW</h1>
+        <span class="page-subtitle">REAL-TIME THREAT MONITORING</span>
+        <span class="live-dot" style="margin-left:auto;">LIVE</span>
+    </div>
+
+    <!-- ── Stat Cards ── -->
+    <div class="cards-grid">
+
+        <div class="card threat">
+            <div class="card-label">Threat Score</div>
+            <div class="card-value {{ threat_level }}">{{ threat_score }}</div>
+            <div class="card-sub text-{{ threat_level|lower }}">{{ threat_level }} RISK</div>
+        </div>
+
+        <div class="card">
+            <div class="card-label">Total Events</div>
+            <div class="card-value">{{ total_events }}</div>
+            <div class="card-sub text-dim">all time</div>
+        </div>
+
+        <div class="card">
+            <div class="card-label">Active Alerts</div>
+            <div class="card-value HIGH">{{ alert_count }}</div>
+            <div class="card-sub text-high">high severity</div>
+        </div>
+
+        <div class="card">
+            <div class="card-label">Severity Breakdown</div>
+            {% for s in severity_counts %}
+            <div class="severity-row">
+                <span class="text-{{ s.severity|lower }}" style="font-size:10px;width:50px;">{{ s.severity }}</span>
+                <div class="severity-bar-track">
+                    <div class="severity-bar-fill {{ s.severity }}"
+                         style="width: {{ s.percent|default:'0' }}%"></div>
+                </div>
+                <span class="text-dim" style="font-size:11px;min-width:24px;text-align:right;">{{ s.count }}</span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="card">
+            <div class="card-label">Quick Access</div>
+            <div class="quick-links">
+                <a href="/auth/"       class="quick-link"><span class="icon">🔐</span> Auth Events</a>
+                <a href="/processes/"  class="quick-link"><span class="icon">⚙️</span> Processes</a>
+                <a href="/filesystem/" class="quick-link"><span class="icon">📁</span> Filesystem</a>
+                <a href="/timeline/"   class="quick-link"><span class="icon">📊</span> Timeline</a>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ── Latest Alerts Table ── -->
+    <div class="table-panel">
+        <div class="table-panel-header">
+            <span class="table-panel-title">🚨 Latest High Severity Alerts</span>
+            <span class="table-panel-count">{{ latest_alerts|length }} alerts</span>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Source</th>
+                    <th>Message</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for alert in latest_alerts %}
+                <tr class="alert-row">
+                    <td class="ts">{{ alert.timestamp }}</td>
+                    <td><span class="badge {{ alert.source }}">{{ alert.source }}</span></td>
+                    <td class="text-high">{{ alert.message }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="3" class="empty">// no alerts detected</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
 </div>
 
-<div class="card">
-    <h3>Total Alerts</h3>
-    <h2 class="HIGH">{{ alert_count }}</h2>
-</div>
+<script>
+    // Auto-refresh every 30 seconds
+    setTimeout(() => location.reload(), 30000);
 
-<div class="card">
-    <h3>Severity Breakdown</h3>
-    {% for s in severity_counts %}
-        <p class="{{ s.severity }}">
-            {{ s.severity }} : {{ s.count }}
-        </p>
-    {% endfor %}
-</div>
-
-<div class="card">
-    <h3>Quick Links</h3>
-    <p><a href="/auth/">🔐 Auth Events</a></p>
-    <p><a href="/processes/">⚙️ Process Events</a></p>
-    <p><a href="/filesystem/">📁 Filesystem Events</a></p>
-</div>
-
-<h2>🚨 Latest High Severity Alerts</h2>
-
-<table>
-    <tr>
-        <th>Time</th>
-        <th>Source</th>
-        <th>Message</th>
-    </tr>
-    {% for alert in latest_alerts %}
-    <tr>
-        <td>{{ alert.timestamp }}</td>
-        <td>{{ alert.source }}</td>
-        <td class="HIGH">{{ alert.message }}</td>
-    </tr>
-    {% endfor %}
-</table>
-
+    // Mark active nav link
+    document.querySelectorAll('.nav-link').forEach(link => {
+        if (link.getAttribute('href') === window.location.pathname) {
+            link.classList.add('active');
+        } else {
+            link.classList.remove('active');
+        }
+    });
+</script>
 </body>
 </html>

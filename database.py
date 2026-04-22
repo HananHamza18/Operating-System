@@ -1,6 +1,8 @@
 import sqlite3
 from datetime import datetime
 
+timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
 DB_NAME = "security_logs.db"
 
 def init_db():

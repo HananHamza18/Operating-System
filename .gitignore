@@ -1,0 +1,19 @@
+*.sqlite3
+# Python
+__pycache__/
+*.pyc
+
+# Virtual env
+venv/
+
+# Database
+*.db
+*.db-journal
+
+# Logs / Reports
+*.txt
+*.log
+scan.xml
+
+# OS files
+.DS_Store

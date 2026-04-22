@@ -1,28 +1,98 @@
+{% load static %}
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Security Alerts</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Alerts — SOC</title>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
 </head>
-<body style="background:#111;color:#eee;font-family:Arial">
+<body>
 
-<h1>🚨 High Severity Alerts</h1>
+<nav class="nav">
+    <a href="/" class="nav-brand">SOC MONITOR</a>
+    <a href="/" class="nav-link">Dashboard</a>
+    <a href="/auth/" class="nav-link">Auth</a>
+    <a href="/processes/" class="nav-link">Processes</a>
+    <a href="/filesystem/" class="nav-link">Filesystem</a>
+    <a href="/timeline/" class="nav-link">Timeline</a>
+</nav>
 
-<table border="1" cellpadding="5">
-<tr>
-    <th>Time</th>
-    <th>Source</th>
-    <th>Message</th>
-</tr>
-{% for alert in alerts %}
-<tr>
-    <td>{{ alert.timestamp }}</td>
-    <td>{{ alert.source }}</td>
-    <td>{{ alert.message }}</td>
-</tr>
-{% endfor %}
-</table>
+<div class="page">
 
-<a href="/">Back to Dashboard</a>
+    <div class="page-header">
+        <h1 class="page-title"><span>🚨</span> HIGH SEVERITY ALERTS</h1>
+        <span class="live-dot" style="margin-left:auto;">LIVE</span>
+    </div>
 
+    <a href="/" class="back-link">← Back to Dashboard</a>
+
+    <!-- Filter bar -->
+    <div class="filter-bar">
+        <input class="filter-input" type="text" id="searchInput"
+               placeholder="// search alerts..." oninput="filterTable()">
+        <select class="filter-select" id="sourceFilter" onchange="filterTable()">
+            <option value="">All Sources</option>
+            <option value="ssh">SSH</option>
+            <option value="filesystem">Filesystem</option>
+            <option value="process">Process</option>
+            <option value="sudo">Sudo</option>
+            <option value="auth">Auth</option>
+        </select>
+    </div>
+
+    <div class="table-panel">
+        <div class="table-panel-header">
+            <span class="table-panel-title">Alert Log</span>
+            <span class="table-panel-count" id="rowCount">{{ alerts|length }} entries</span>
+        </div>
+        <table id="alertTable">
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Source</th>
+                    <th>Message</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for alert in alerts %}
+                <tr class="alert-row">
+                    <td class="ts">{{ alert.timestamp }}</td>
+                    <td><span class="badge {{ alert.source }}">{{ alert.source }}</span></td>
+                    <td class="text-high">{{ alert.message }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="3" class="empty">// no high severity alerts found</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+</div>
+
+<script>
+function filterTable() {
+    const search = document.getElementById('searchInput').value.toLowerCase();
+    const source = document.getElementById('sourceFilter').value.toLowerCase();
+    const rows   = document.querySelectorAll('#alertTable tbody tr');
+    let visible  = 0;
+
+    rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        const matchSearch = !search || text.includes(search);
+        const matchSource = !source || text.includes(source);
+        const show = matchSearch && matchSource;
+        row.classList.toggle('hidden', !show);
+        if (show) visible++;
+    });
+
+    document.getElementById('rowCount').textContent = visible + ' entries';
+}
+
+document.querySelectorAll('.nav-link').forEach(link => {
+    if (link.getAttribute('href') === window.location.pathname)
+        link.classList.add('active');
+});
+</script>
 </body>
 </html>

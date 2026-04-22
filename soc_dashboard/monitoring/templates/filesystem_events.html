@@ -1,53 +1,111 @@
+{% load static %}
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Filesystem Monitoring</title>
-    <style>
-        body {
-            background-color: #0f172a;
-            color: #e5e7eb;
-            font-family: Arial;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        th, td {
-            padding: 10px;
-            border-bottom: 1px solid #334155;
-        }
-        th {
-            background-color: #020617;
-        }
-        .HIGH { color: #ef4444; }
-        .MEDIUM { color: #facc15; }
-        .LOW { color: #22c55e; }
-    </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Filesystem Events — SOC</title>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
 </head>
 <body>
 
-<h2>📁 Filesystem Activity & Alerts</h2>
+<nav class="nav">
+    <a href="/" class="nav-brand">SOC MONITOR</a>
+    <a href="/" class="nav-link">Dashboard</a>
+    <a href="/auth/" class="nav-link">Auth</a>
+    <a href="/processes/" class="nav-link">Processes</a>
+    <a href="/filesystem/" class="nav-link active">Filesystem</a>
+    <a href="/timeline/" class="nav-link">Timeline</a>
+</nav>
 
-<table>
-    <tr>
-        <th>Time</th>
-        <th>Event</th>
-        <th>Source</th>
-        <th>Details</th>
-        <th>Severity</th>
-    </tr>
+<div class="page">
 
-    {% for event in events %}
-    <tr>
-        <td>{{ event.timestamp }}</td>
-        <td>{{ event.event_type }}</td>
-        <td>{{ event.source }}</td>
-        <td>{{ event.message }}</td>
-        <td class="{{ event.severity }}">{{ event.severity }}</td>
-    </tr>
-    {% endfor %}
+    <div class="page-header">
+        <h1 class="page-title"><span>📁</span> FILESYSTEM ACTIVITY</h1>
+        <span class="page-subtitle">FILE CREATE / MODIFY / DELETE</span>
+        <span class="live-dot" style="margin-left:auto;">LIVE</span>
+    </div>
 
-</table>
+    <a href="/" class="back-link">← Back to Dashboard</a>
 
+    <div class="filter-bar">
+        <input class="filter-input" type="text" id="searchInput"
+               placeholder="// search path or event..." oninput="filterTable()">
+        <select class="filter-select" id="typeFilter" onchange="filterTable()">
+            <option value="">All Types</option>
+            <option value="FILE_CREATE">Create</option>
+            <option value="FILE_MODIFY">Modify</option>
+            <option value="FILE_DELETE">Delete</option>
+            <option value="ALERT">Alert</option>
+        </select>
+        <button class="filter-btn HIGH"   onclick="toggleSeverity('HIGH')"   id="btn-HIGH">HIGH</button>
+        <button class="filter-btn MEDIUM" onclick="toggleSeverity('MEDIUM')" id="btn-MEDIUM">MEDIUM</button>
+        <button class="filter-btn LOW"    onclick="toggleSeverity('LOW')"    id="btn-LOW">LOW</button>
+    </div>
+
+    <div class="table-panel">
+        <div class="table-panel-header">
+            <span class="table-panel-title">Filesystem Log</span>
+            <span class="table-panel-count" id="rowCount">{{ events|length }} entries</span>
+        </div>
+        <table id="eventsTable">
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Type</th>
+                    <th>Source</th>
+                    <th>Message</th>
+                    <th>Severity</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for event in events %}
+                <tr data-severity="{{ event.severity }}"
+                    {% if event.severity == "HIGH" %}class="alert-row"{% endif %}>
+                    <td class="ts">{{ event.timestamp }}</td>
+                    <td><span class="text-cyan" style="font-size:11px;letter-spacing:1px;">{{ event.event_type }}</span></td>
+                    <td><span class="badge filesystem">{{ event.source }}</span></td>
+                    <td style="word-break:break-all;">{{ event.message }}</td>
+                    <td><span class="pill {{ event.severity }}">{{ event.severity }}</span></td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="5" class="empty">// no filesystem events found</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+</div>
+
+<script>
+let activeSeverity = null;
+
+function toggleSeverity(sev) {
+    activeSeverity = activeSeverity === sev ? null : sev;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    if (activeSeverity)
+        document.getElementById('btn-' + activeSeverity).classList.add('active');
+    filterTable();
+}
+
+function filterTable() {
+    const search = document.getElementById('searchInput').value.toLowerCase();
+    const type   = document.getElementById('typeFilter').value.toLowerCase();
+    const rows   = document.querySelectorAll('#eventsTable tbody tr');
+    let visible  = 0;
+
+    rows.forEach(row => {
+        const text     = row.textContent.toLowerCase();
+        const severity = row.dataset.severity;
+        const show = (!search || text.includes(search))
+                  && (!type   || text.includes(type))
+                  && (!activeSeverity || severity === activeSeverity);
+        row.classList.toggle('hidden', !show);
+        if (show) visible++;
+    });
+
+    document.getElementById('rowCount').textContent = visible + ' entries';
+}
+</script>
 </body>
 </html>

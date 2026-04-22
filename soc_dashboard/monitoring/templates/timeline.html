@@ -1,0 +1,92 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Attack Timeline — SOC</title>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+</head>
+<body>
+
+<nav class="nav">
+    <a href="/" class="nav-brand">SOC MONITOR</a>
+    <a href="/" class="nav-link">Dashboard</a>
+    <a href="/auth/" class="nav-link">Auth</a>
+    <a href="/processes/" class="nav-link">Processes</a>
+    <a href="/filesystem/" class="nav-link">Filesystem</a>
+    <a href="/timeline/" class="nav-link active">Timeline</a>
+</nav>
+
+<div class="page">
+
+    <div class="page-header">
+        <h1 class="page-title"><span>📊</span> ATTACK TIMELINE</h1>
+        <span class="page-subtitle">CHRONOLOGICAL EVENT RECONSTRUCTION</span>
+        <span class="live-dot" style="margin-left:auto;">LIVE</span>
+    </div>
+
+    <a href="/" class="back-link">← Back to Dashboard</a>
+
+    <!-- Filter bar -->
+    <div class="filter-bar">
+        <input class="filter-input" type="text" id="searchInput"
+               placeholder="// filter events..." oninput="filterTimeline()">
+        <button class="filter-btn HIGH"   onclick="toggleSeverity('HIGH')"   id="btn-HIGH">HIGH</button>
+        <button class="filter-btn MEDIUM" onclick="toggleSeverity('MEDIUM')" id="btn-MEDIUM">MEDIUM</button>
+        <button class="filter-btn LOW"    onclick="toggleSeverity('LOW')"    id="btn-LOW">LOW</button>
+        <span class="text-dim" style="font-size:11px;margin-left:auto;" id="eventCount">
+            {{ events|length }} events
+        </span>
+    </div>
+
+    <!-- Timeline -->
+    <div class="timeline" id="timeline">
+        {% for event in events %}
+        <div class="tl-event {{ event.severity }}" data-severity="{{ event.severity }}">
+            <div class="tl-time">{{ event.timestamp }}</div>
+            <div class="tl-type {{ event.severity }}">{{ event.event_type }}</div>
+            <div class="tl-msg">{{ event.message }}</div>
+        </div>
+        {% empty %}
+        <div class="empty">// no events to display</div>
+        {% endfor %}
+    </div>
+
+</div>
+
+<script>
+let activeSeverity = null;
+
+function toggleSeverity(sev) {
+    activeSeverity = activeSeverity === sev ? null : sev;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    if (activeSeverity)
+        document.getElementById('btn-' + activeSeverity).classList.add('active');
+    filterTimeline();
+}
+
+function filterTimeline() {
+    const search = document.getElementById('searchInput').value.toLowerCase();
+    const events = document.querySelectorAll('#timeline .tl-event');
+    let visible  = 0;
+
+    events.forEach(ev => {
+        const text     = ev.textContent.toLowerCase();
+        const severity = ev.dataset.severity;
+        const show = (!search || text.includes(search))
+                  && (!activeSeverity || severity === activeSeverity);
+        ev.classList.toggle('hidden', !show);
+        if (show) visible++;
+    });
+
+    document.getElementById('eventCount').textContent = visible + ' events';
+}
+
+// Stagger timeline entries on load
+document.querySelectorAll('.tl-event').forEach((el, i) => {
+    el.style.animationDelay = (i * 40) + 'ms';
+});
+</script>
+</body>
+</html>
