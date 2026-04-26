@@ -7,9 +7,9 @@ print("=== REAL-TIME PROCESS MONITOR STARTED ===")
 
 known_pids = set()
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
 # EXACT process names to silently ignore
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
 IGNORE_PROCESS_NAMES = {
     # Firefox sandbox / renderer helpers
     "bwrap", "glycin-image-rs", "glycin-svg",
@@ -32,6 +32,7 @@ IGNORE_PROCESS_NAMES = {
     # Session / display services
     "dbus-daemon", "gpg-agent", "gnome-keyring-daemon",
     "xfce4-session", "xfce4-notifyd", "xfce4-panel",
+    "xfce4-mime-helper",                   # NEW: MIME handler spawned constantly
     "lightdm", "Xorg",
 
     # systemd workers and services
@@ -39,6 +40,22 @@ IGNORE_PROCESS_NAMES = {
     "systemd-timesyncd", "systemd-userdbd",
     "systemd-udevd", "systemd-userwork:",
     "nm-dispatcher",
+
+    # SSH daemon internals — these are ssh server worker processes,
+    # not user-initiated ssh commands. Actual ssh client is kept.
+    "sshd-session",                        # NEW: SSH session handler
+    "sshd-auth",                           # NEW: SSH auth worker
+
+    # PAM / auth helpers — these are called internally by sudo/su/login
+    # The actual auth event is captured by real_time_auth.py instead
+    "unix_chkpwd",                         # NEW: PAM password validator
+    "polkit-agent-helper-1",               # NEW: PolicyKit auth agent
+
+    # Disk / block device queries — triggered by desktop automount
+    "lsblk",                               # NEW: block device lister
+
+    # Backup / system tools launched by desktop
+    "SystemToolsBack",                     # NEW: XFCE system tools backend
 
     # VMware tools
     "vmware-vmblock-fuse",
@@ -56,13 +73,14 @@ IGNORE_PROCESS_NAMES = {
     "psimon",
 }
 
-# ─────────────────────────────────────────────
-# PREFIX patterns to ignore (kernel threads)
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
+# PREFIX patterns to ignore (kernel threads & irq handlers)
+# ─────────────────────────────────────────────────────────
 IGNORE_PREFIXES = (
-    "kworker/",   # e.g. kworker/0:2-events
-    "irq/",       # e.g. irq/56-vmw_vmci
-    "jbd2/",      # e.g. jbd2/sda1-8
+    "kworker/",     # e.g. kworker/0:2-events
+    "irq/",         # e.g. irq/56-vmw_vmci
+    "jbd2/",        # e.g. jbd2/sda1-8
+    "xfce4-",       # e.g. xfce4-mime-helper, xfce4-notifyd (catch all variants)
 )
 
 
@@ -98,7 +116,7 @@ def monitor_processes():
                 print("[PROCESS START]", message)
                 log_event("PROCESS_START", name, message, "LOW")
 
-                # BUG FIX: was undefined `process_name`, corrected to `name`
+                # BUG FIX: original code used undefined `process_name`, fixed to `name`
                 detect_suspicious_process(name)
 
                 # Alert: root process running from /tmp

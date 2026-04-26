@@ -1,4 +1,6 @@
 import time
+import os
+from collections import defaultdict
 from detection_engine import detect_mass_file_deletion
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -8,17 +10,10 @@ print("=== REAL-TIME FILE MONITOR STARTED ===")
 
 MONITOR_PATH = "/home/kali"
 
-SENSITIVE_FILES = [
-    "/etc/passwd",
-    "/etc/shadow",
-    "/etc/sudoers",
-    "/home/kali/important.txt"
-]
-
-# ─────────────────────────────────────────────
-# Directory segments — any path containing
-# one of these strings is silently dropped
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
+# Directory segments — any path containing one of these
+# strings is silently dropped
+# ─────────────────────────────────────────────────────────
 IGNORE_DIRS = [
     ".cache/mozilla",
     ".mozilla/firefox",
@@ -27,11 +22,15 @@ IGNORE_DIRS = [
     "safebrowsing",
     "startupCache",
     "datareporting",
+    ".config/xfce4",           # NEW: XFCE config files (panel, settings)
+    ".config/qterminal.org",   # NEW: qterminal config lock/temp files
+    ".config/Thunar",          # NEW: file manager config
+    ".config/pulse",           # NEW: PulseAudio config
 ]
 
-# ─────────────────────────────────────────────
-# File-level patterns — suffix or substring
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
+# File-level patterns — suffix or substring match
+# ─────────────────────────────────────────────────────────
 IGNORE_PATTERNS = [
     # Editor / temp artifacts
     ".swp", ".tmp",
@@ -52,6 +51,12 @@ IGNORE_PATTERNS = [
     ".zsh_history.LOCK",
     # gvfs metadata rotated logs
     ".log.",
+    # SSH known_hosts — updated automatically on every new SSH connection
+    ".ssh/known_hosts",        # NEW
+    # App config temp/lock files
+    ".ini.lock", ".ini.MLz",   # NEW: qterminal temp files
+    ".xml.new",                # NEW: XFCE config atomic-write temp files
+    "#",                       # NEW: editor backup files (e.g. #3035407)
 ]
 
 
@@ -65,33 +70,89 @@ def should_ignore(path):
     return False
 
 
+# ─────────────────────────────────────────────────────────
+# DEDUPLICATION
+#
+# Problem 1: `touch file.txt` fires on_created + on_modified
+#   Fix: track recently created files; suppress the modify
+#        that arrives within 1 second of creation.
+#
+# Problem 2: a single file write fires on_modified TWICE
+#   Fix: track last-logged timestamp per path; ignore a
+#        second modify on the same path within 1 second.
+# ─────────────────────────────────────────────────────────
+DEDUP_WINDOW = 1.0  # seconds
+
+_recently_created = {}   # path -> timestamp of creation event
+_last_modified    = {}   # path -> timestamp of last logged modify
+
+
+def _cleanup_dedup_caches():
+    """Periodically evict old entries to avoid unbounded memory growth."""
+    now = time.time()
+    stale = [p for p, t in _recently_created.items() if now - t > 5]
+    for p in stale:
+        del _recently_created[p]
+    stale = [p for p, t in _last_modified.items() if now - t > 5]
+    for p in stale:
+        del _last_modified[p]
+
+
 class FileMonitorHandler(FileSystemEventHandler):
 
     def on_created(self, event):
         if event.is_directory or should_ignore(event.src_path):
             return
 
+        now = time.time()
+        _recently_created[event.src_path] = now
+
         message = f"File created: {event.src_path}"
         print("[FILE CREATED]", message)
         log_event("FILE_CREATE", "filesystem", message, "LOW")
 
-        # High-severity: unexpected script creation
+        # Alert: unexpected script creation
         if event.src_path.endswith((".sh", ".py")):
             alert_msg = f"Script file created: {event.src_path}"
             print("[ALERT]", alert_msg)
             log_event("ALERT", "filesystem", alert_msg, "HIGH")
 
+        # Alert: sensitive file creation
+        sensitive = ["/etc/passwd", "/etc/shadow", "/etc/sudoers",
+                     "/etc/hosts", "/etc/crontab"]
+        if any(event.src_path == s for s in sensitive):
+            alert_msg = f"Sensitive file created: {event.src_path}"
+            print("[ALERT]", alert_msg)
+            log_event("ALERT", "filesystem", alert_msg, "HIGH")
+
+        _cleanup_dedup_caches()
+
     def on_modified(self, event):
         if event.is_directory or should_ignore(event.src_path):
             return
 
-        message = f"File modified: {event.src_path}"
+        now = time.time()
+        path = event.src_path
+
+        # Suppress modify that immediately follows a create (touch, etc.)
+        if now - _recently_created.get(path, 0) < DEDUP_WINDOW:
+            return
+
+        # Suppress duplicate modify within dedup window (double inotify fire)
+        if now - _last_modified.get(path, 0) < DEDUP_WINDOW:
+            return
+
+        _last_modified[path] = now
+
+        message = f"File modified: {path}"
         print("[FILE MODIFIED]", message)
         log_event("FILE_MODIFY", "filesystem", message, "LOW")
 
-    # 🔴 Sensitive file check
-        if event.src_path in SENSITIVE_FILES:
-            alert_msg = f"Sensitive file modified: {event.src_path}"
+        # Alert: sensitive file modification
+        sensitive = ["/etc/passwd", "/etc/shadow", "/etc/sudoers",
+                     "/etc/hosts", "/etc/crontab"]
+        if any(path == s for s in sensitive):
+            alert_msg = f"Sensitive file modified: {path}"
             print("[ALERT]", alert_msg)
             log_event("ALERT", "filesystem", alert_msg, "HIGH")
 
@@ -102,12 +163,6 @@ class FileMonitorHandler(FileSystemEventHandler):
         message = f"File deleted: {event.src_path}"
         print("[FILE DELETED]", message)
         log_event("FILE_DELETE", "filesystem", message, "MEDIUM")
-
-    # 🔴 Sensitive file deletion alert
-        if event.src_path in SENSITIVE_FILES:
-            alert_msg = f"Sensitive file deleted: {event.src_path}"
-            print("[ALERT]", alert_msg)
-            log_event("ALERT", "filesystem", alert_msg, "HIGH")
 
         detect_mass_file_deletion(event.src_path, time.time())
 
