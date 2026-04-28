@@ -1,10 +1,23 @@
+"""
+detection_engine.py  —  Security Logging & Reporting System
+All threat detection logic lives here.
+
+Bugs fixed vs original GitHub version:
+  1. Brute force threshold was 5 — changed to 3
+  2. No IP-based brute force tracker — added
+  3. No sudo / su failure trackers — added
+  4. Suspicious process used substring match causing false positives
+     e.g. "nc" matched "systemd-timesyncd" — changed to exact match
+  5. No alert cooldown — same event spammed repeatedly — added 120s cooldown
+  6. Mass file deletion had no noise filtering and no cooldown — both added
+  7. No reset of failure counters after alert fired — added
+"""
+
 from collections import defaultdict
 import time
 from database import log_event
 
-# ─────────────────────────────────────────────────────────
-# Thresholds
-# ─────────────────────────────────────────────────────────
+# ── Thresholds ────────────────────────────────────────────
 BRUTE_FORCE_THRESHOLD = 3     # failures before alert
 BRUTE_FORCE_WINDOW    = 60    # seconds to look back
 ALERT_COOLDOWN        = 120   # seconds before re-alerting same key
@@ -13,9 +26,7 @@ MASS_DELETE_THRESHOLD = 10
 MASS_DELETE_WINDOW    = 30
 MASS_DELETE_COOLDOWN  = 60
 
-# ─────────────────────────────────────────────────────────
-# Per-source failure trackers
-# ─────────────────────────────────────────────────────────
+# ── Per-source failure trackers ───────────────────────────
 _ssh_user_tracker = defaultdict(list)
 _ssh_ip_tracker   = defaultdict(list)
 _sudo_tracker     = defaultdict(list)
@@ -24,23 +35,19 @@ _su_tracker       = defaultdict(list)
 # Cooldown store: key -> last alert epoch
 _cooldowns = defaultdict(float)
 
-# ─────────────────────────────────────────────────────────
-# Mass file deletion tracking
-# ─────────────────────────────────────────────────────────
+# ── Mass deletion tracking ────────────────────────────────
 _delete_tracker         = defaultdict(list)
 _last_mass_delete_alert = 0.0
 
+# Paths excluded from mass-deletion count (browser/system noise)
 MASS_DELETE_IGNORE_DIRS = [
     ".cache/mozilla", ".mozilla/firefox",
     "safebrowsing", ".local/share/gvfs-metadata",
     ".config/xfce4", ".config/qterminal.org",
 ]
 
-# ─────────────────────────────────────────────────────────
-# Suspicious process names — EXACT match only
-# Using exact match prevents false positives like
-# "nc" matching inside "systemd-timesyncd"
-# ─────────────────────────────────────────────────────────
+# ── Suspicious processes — EXACT match only ───────────────
+# Exact match prevents false positives like "nc" inside "systemd-timesyncd"
 SUSPICIOUS_PROCESSES = {
     "nmap", "hydra", "nc", "netcat",
     "msfconsole", "metasploit", "sqlmap",
@@ -50,9 +57,7 @@ SUSPICIOUS_PROCESSES = {
 }
 
 
-# ══════════════════════════════════════════════════════════
-#  INTERNAL HELPERS
-# ══════════════════════════════════════════════════════════
+# ── Internal helpers ──────────────────────────────────────
 
 def _prune(lst, now, window):
     return [t for t in lst if now - t < window]
@@ -61,20 +66,15 @@ def _prune(lst, now, window):
 def _fire_alert(source, cd_key, count, label, now):
     """Emit alert if threshold reached and cooldown has passed."""
     if count >= BRUTE_FORCE_THRESHOLD and now - _cooldowns[cd_key] > ALERT_COOLDOWN:
-        alert_msg = (
-            f"[BRUTE FORCE] {label} — "
-            f"{count} failures in {BRUTE_FORCE_WINDOW}s"
-        )
-        print("[ALERT]", alert_msg)
-        log_event("ALERT", source, alert_msg, "HIGH")
+        msg = f"[BRUTE FORCE] {label} — {count} failures in {BRUTE_FORCE_WINDOW}s"
+        print("[ALERT]", msg)
+        log_event("ALERT", source, msg, "HIGH")
         _cooldowns[cd_key] = now
         return True
     return False
 
 
-# ══════════════════════════════════════════════════════════
-#  PUBLIC DETECTION FUNCTIONS
-# ══════════════════════════════════════════════════════════
+# ── Public detection functions ────────────────────────────
 
 def detect_failed_login(user, timestamp):
     """SSH failed login — track per username."""
@@ -117,30 +117,30 @@ def detect_su_failure(user, timestamp):
 
 
 def detect_suspicious_process(process_name):
-    """
-    Exact match against known attack tool names.
-    Prevents false positives from substring matching.
-    """
+    """Exact match against known attack tool names."""
     if process_name.lower().strip() in SUSPICIOUS_PROCESSES:
-        alert_msg = f"Suspicious process detected: {process_name}"
-        print("[ALERT]", alert_msg)
-        log_event("ALERT", "process", alert_msg, "HIGH")
+        msg = f"Suspicious process detected: {process_name}"
+        print("[ALERT]", msg)
+        log_event("ALERT", "process", msg, "HIGH")
 
 
 def detect_mass_file_deletion(file_path, timestamp):
     """Alert on 10+ real file deletions within 30 seconds."""
     global _last_mass_delete_alert
 
+    # Skip browser/system noise paths
     if any(d in file_path for d in MASS_DELETE_IGNORE_DIRS):
         return
 
     _delete_tracker["global"].append(timestamp)
-    _delete_tracker["global"] = _prune(_delete_tracker["global"], timestamp, MASS_DELETE_WINDOW)
+    _delete_tracker["global"] = _prune(
+        _delete_tracker["global"], timestamp, MASS_DELETE_WINDOW
+    )
 
     if (len(_delete_tracker["global"]) >= MASS_DELETE_THRESHOLD
             and timestamp - _last_mass_delete_alert > MASS_DELETE_COOLDOWN):
-        alert_msg = "Mass file deletion detected!"
-        print("[ALERT]", alert_msg)
-        log_event("ALERT", "filesystem", alert_msg, "HIGH")
+        msg = "Mass file deletion detected!"
+        print("[ALERT]", msg)
+        log_event("ALERT", "filesystem", msg, "HIGH")
         _last_mass_delete_alert = timestamp
         _delete_tracker["global"] = []

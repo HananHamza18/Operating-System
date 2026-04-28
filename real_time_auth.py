@@ -1,3 +1,22 @@
+"""
+real_time_auth.py  —  Security Logging & Reporting System
+Main entry point — starts all monitors as threads.
+
+Bugs fixed vs original GitHub version:
+  1. Ran journalctl in main thread blocking everything — converted to threads
+  2. PAM regex looked for "authentication failure" — Kali actually logs
+     "conversation failed" and "auth could not identify password" — fixed
+  3. No su failure detection at all — added
+  4. No PAM failure detection at all — added
+  5. IP brute force used a simple counter with no time window — replaced
+     with proper time-windowed tracker via detect_failed_ip()
+  6. /proc watcher printed [SU DETECTED] to CLI but never called log_event()
+     so su events never appeared in the dashboard — fixed
+  7. event_type logged as "AUTH" — no matching view query — changed to
+     "AUTH_FAIL" / "AUTH_SUCCESS" to match views.py and reporting_engine
+  8. No auth.log monitoring — added (catches su failures on Kali)
+"""
+
 import time
 import threading
 import subprocess
@@ -5,131 +24,134 @@ import re
 import os
 import glob
 import pwd
-from collections import defaultdict
 
 from detection_engine import (
     detect_failed_login, detect_failed_ip,
     detect_sudo_failure, detect_su_failure
 )
-from file_monitor import monitor_files
+from file_monitor    import monitor_files
 from process_monitor import monitor_processes
-from database import init_db, log_event
+from database        import init_db, log_event
 
 print("=== REAL-TIME DEFENSE SYSTEM STARTED ===")
 init_db()
 
 
-# ══════════════════════════════════════════════════════════
-#  REGEX — matched against ACTUAL Kali journal output
+# ── Compiled regex — matched to ACTUAL Kali journal output ──
 #
-#  What journalctl REALLY outputs on Kali (verified):
-#
-#  sudo wrong password:
-#    pam_unix(sudo:auth): conversation failed
-#    pam_unix(sudo:auth): auth could not identify password for [kali]
-#
-#  sudo success:
-#    sudo[PID]: kali : TTY=pts/0 ; ... COMMAND=/usr/bin/...
-#    pam_unix(sudo:session): session opened for user root...
-#
-#  SSH failed:
-#    Failed password for kali from 192.168.x.x port ...
-#
-#  SSH success:
-#    Accepted password for kali from 192.168.x.x port ...
-#
-#  su wrong password  →  appears in /var/log/auth.log (rsyslog)
-#    pam_unix(su:auth): authentication failure; ... user=kali
-#    su: FAILED SU (to fakeuser) kali on /dev/pts/0
-# ══════════════════════════════════════════════════════════
+# Verified format from journalctl on Kali:
+#   sudo wrong password:
+#     pam_unix(sudo:auth): conversation failed
+#     pam_unix(sudo:auth): auth could not identify password for [kali]
+#   sudo success:
+#     sudo[PID]: kali : TTY=pts/0 ; ... COMMAND=/usr/bin/...
+#     pam_unix(sudo:session): session opened for user root by kali(uid=1000)
+#   su wrong password → only in /var/log/auth.log (not journalctl)
+#     pam_unix(su:auth): authentication failure; ... user=kali
+#     su: FAILED SU (to fakeuser) kali on /dev/pts/0
 
-# sudo PAM failure — matches BOTH real Kali formats
-RE_SUDO_CONV_FAIL = re.compile(
-    r"pam_unix\(sudo:auth\):\s+(?:conversation failed|auth could not identify password for \[(\w+)\])"
-)
-RE_SUDO_USER_FROM_PROC = re.compile(r"sudo\[(\d+)\]:\s+(\w+)\s+:")  # sudo[PID]: user :
-RE_SUDO_CMD      = re.compile(r"sudo\[?\d*\]?:.*COMMAND=")
-RE_SUDO_SESSION  = re.compile(r"pam_unix\(sudo:session\): session opened for user \w+ by (\w+)")
+RE_FAILED_SSH_USER  = re.compile(r"Failed password for (?:invalid user )?(\w+)")
+RE_FAILED_SSH_IP    = re.compile(r"from ([\d\.]+)")
+RE_ACCEPTED_SSH     = re.compile(r"(?:Accepted password|Accepted publickey) for (\w+) from ([\d\.]+)")
+RE_SUDO_CONV_FAIL   = re.compile(r"pam_unix\(sudo:auth\):\s+(?:conversation failed|auth could not identify password for \[(\w+)\])")
+RE_SUDO_SESSION     = re.compile(r"pam_unix\(sudo:session\): session opened for user \w+ by (\w+)")
+RE_SUDO_CMD         = re.compile(r"sudo\[?\d*\]?:.*COMMAND=")
+RE_SUDO_USER        = re.compile(r"sudo\[\d+\]:\s+(\w+)\s+:")
+RE_SU_FAIL_PAM      = re.compile(r"pam_unix\(su(?:-l)?:auth\): authentication failure.*?user=(\w+)")
+RE_SU_FAIL_LOG      = re.compile(r"su: FAILED SU \(to (\w+)\) (\w+)")
+RE_SU_SUCCESS       = re.compile(r"Successful su for (\w+) by (\w+)")
+RE_PAM_FAIL         = re.compile(r"pam_unix\((\w+):auth\): authentication failure.*?user=(\w+)")
+RE_PROC_ID          = re.compile(r"\b(?:sudo|su)\[(\d+)\]")
 
-# SSH
-RE_FAILED_SSH_USER = re.compile(r"Failed password for (?:invalid user )?(\w+)")
-RE_FAILED_SSH_IP   = re.compile(r"from ([\d\.]+)")
-RE_ACCEPTED_SSH    = re.compile(r"(?:Accepted password|Accepted publickey) for (\w+) from ([\d\.]+)")
-
-# su (appears in auth.log via rsyslog, not in journalctl on Kali)
-RE_SU_FAIL_PAM   = re.compile(r"pam_unix\(su(?:-l)?:auth\): authentication failure.*?user=(\w+)")
-RE_SU_FAIL_LOG   = re.compile(r"su: FAILED SU \(to (\w+)\) (\w+)")
-RE_SU_SUCCESS    = re.compile(r"Successful su for (\w+) by (\w+)")
-
-# Generic PAM failure for other services
-RE_PAM_FAIL      = re.compile(r"pam_unix\((\w+):auth\): authentication failure.*?user=(\w+)")
-
-# Track which sudo PIDs we've already extracted the username from
-_sudo_fail_pids = {}   # pid -> username
+_auth_dedup_cache = {}
+_AUTH_DEDUP_WINDOW = 2.0
+_seen_failed_auth_by_pid = {}
 
 
-def _parse_line(line, now, source_label="journal"):
+def _mark_seen_once(source, event_type, message, now):
+    key = (source, event_type, message)
+    last = _auth_dedup_cache.get(key, 0.0)
+    if now - last < _AUTH_DEDUP_WINDOW:
+        return True
+    _auth_dedup_cache[key] = now
+    if len(_auth_dedup_cache) > 2000:
+        stale = [k for k, ts in _auth_dedup_cache.items() if now - ts > 30]
+        for k in stale:
+            del _auth_dedup_cache[k]
+    return False
+
+
+def _extract_proc_id(line):
+    m = RE_PROC_ID.search(line)
+    return m.group(1) if m else None
+
+
+def _parse_line(line, now):
     """
     Parse one line from journalctl or auth.log.
-    Fires the appropriate detection function AND logs to DB.
+    Calls log_event() AND the appropriate detection function for every match.
     """
 
-    # ── sudo: PAM conversation failed (Kali-specific format) ──
-    # This is what Kali actually logs instead of "authentication failure"
+    # ── sudo: PAM conversation failed (Kali actual format) ───
     if "pam_unix(sudo:auth)" in line:
         if "conversation failed" in line or "auth could not identify" in line:
-            # Extract username from the process line pattern sudo[PID]: user :
-            # We can't get it from this line directly — look it up from /proc
-            # using the PID in the line
-            pid_match = re.search(r"sudo\[(\d+)\]", line)
-            user = "unknown"
-            if pid_match:
-                pid = pid_match.group(1)
-                try:
-                    with open(f"/proc/{pid}/status") as f:
-                        for l in f:
-                            if l.startswith("Uid:"):
-                                uid = int(l.split()[1])
-                                user = pwd.getpwuid(uid).pw_name
-                                break
-                except Exception:
-                    pass
-                _sudo_fail_pids[pid] = user
+            pid = _extract_proc_id(line)
+            if pid:
+                last = _seen_failed_auth_by_pid.get(("sudo", pid), 0.0)
+                if now - last < 5:
+                    return
+                _seen_failed_auth_by_pid[("sudo", pid)] = now
 
-            # Also try extracting from "auth could not identify password for [user]"
-            bracket_match = re.search(r"for \[(\w+)\]", line)
-            if bracket_match:
-                user = bracket_match.group(1)
+            # Try extracting username from "for [username]"
+            bracket = re.search(r"for \[(\w+)\]", line)
+            user    = bracket.group(1) if bracket else "unknown"
+
+            # Fallback: read from /proc using PID in the line
+            if user == "unknown":
+                pid_m = re.search(r"sudo\[(\d+)\]", line)
+                if pid_m:
+                    try:
+                        with open(f"/proc/{pid_m.group(1)}/status") as f:
+                            for l in f:
+                                if l.startswith("Uid:"):
+                                    user = pwd.getpwuid(int(l.split()[1])).pw_name
+                                    break
+                    except Exception:
+                        pass
 
             msg = f"Wrong sudo password for user '{user}'"
             print("[SUDO FAIL]", msg)
+            if _mark_seen_once("sudo", "AUTH_FAIL", msg, now):
+                return
             log_event("AUTH_FAIL", "sudo", msg, "MEDIUM")
             detect_sudo_failure(user, now)
             return
 
-    # ── sudo: session opened = successful sudo ───────────────
+    # ── sudo: session opened = successful sudo ────────────────
     if "pam_unix(sudo:session): session opened" in line:
-        m = RE_SUDO_SESSION.search(line)
+        m    = RE_SUDO_SESSION.search(line)
         user = m.group(1) if m else "unknown"
-        msg = f"sudo session opened by '{user}'"
+        msg  = f"sudo session opened by '{user}'"
         print("[SUDO SUCCESS]", msg)
+        if _mark_seen_once("sudo", "AUTH_SUCCESS", msg, now):
+            return
         log_event("AUTH_SUCCESS", "sudo", msg, "LOW")
         return
 
-    # ── sudo: COMMAND= line (privilege escalation log) ───────
+    # ── sudo: COMMAND= line ───────────────────────────────────
     if RE_SUDO_CMD.search(line):
-        # Extract user from "sudo[PID]: username :"
-        m = RE_SUDO_USER_FROM_PROC.search(line)
-        user = m.group(2) if m else "unknown"
-        # Extract command
-        cmd_match = re.search(r"COMMAND=(.+)", line)
-        cmd = cmd_match.group(1).strip() if cmd_match else line.strip()
-        msg = f"sudo command by '{user}': {cmd}"
+        m    = RE_SUDO_USER.search(line)
+        user = m.group(1) if m else "unknown"
+        cmd  = re.search(r"COMMAND=(.+)", line)
+        cmd  = cmd.group(1).strip() if cmd else line.strip()
+        msg  = f"sudo command by '{user}': {cmd}"
         print("[SUDO USAGE]", msg)
+        if _mark_seen_once("sudo", "PRIV_ESC", msg, now):
+            return
         log_event("PRIV_ESC", "sudo", msg, "MEDIUM")
         return
 
-    # ── SSH: failed password ─────────────────────────────────
+    # ── SSH: failed password ──────────────────────────────────
     if "Failed password" in line:
         m_user = RE_FAILED_SSH_USER.search(line)
         m_ip   = RE_FAILED_SSH_IP.search(line)
@@ -137,16 +159,18 @@ def _parse_line(line, now, source_label="journal"):
             user = m_user.group(1)
             msg  = f"Failed SSH login for user '{user}'"
             print("[AUTH FAILED]", msg)
-            log_event("AUTH_FAIL", "ssh", msg, "MEDIUM")
+            if not _mark_seen_once("ssh", "AUTH_FAIL", msg, now):
+                log_event("AUTH_FAIL", "ssh", msg, "MEDIUM")
             detect_failed_login(user, now)
         if m_ip:
             ip  = m_ip.group(1)
             msg = f"Failed SSH login from IP {ip}"
-            log_event("AUTH_FAIL", "ssh", msg, "MEDIUM")
+            if not _mark_seen_once("ssh", "AUTH_FAIL", msg, now):
+                log_event("AUTH_FAIL", "ssh", msg, "MEDIUM")
             detect_failed_ip(ip, now)
         return
 
-    # ── SSH: successful login ────────────────────────────────
+    # ── SSH: successful login ─────────────────────────────────
     if "Accepted password" in line or "Accepted publickey" in line:
         m = RE_ACCEPTED_SSH.search(line)
         if m:
@@ -154,55 +178,68 @@ def _parse_line(line, now, source_label="journal"):
         else:
             msg = line.strip()
         print("[SSH LOGIN]", msg)
+        if _mark_seen_once("ssh", "AUTH_SUCCESS", msg, now):
+            return
         log_event("AUTH_SUCCESS", "ssh", msg, "LOW")
         return
 
-    # ── su: PAM authentication failure (in auth.log) ─────────
+    # ── su: PAM auth failure (appears in auth.log on Kali) ───
     if "pam_unix(su" in line and "authentication failure" in line:
-        m = RE_SU_FAIL_PAM.search(line)
+        m    = RE_SU_FAIL_PAM.search(line)
         user = m.group(1) if m else "unknown"
-        msg = f"Wrong password on su attempt for user '{user}'"
+        msg  = f"Wrong password on su attempt for user '{user}'"
         print("[SU FAIL]", msg)
+        pid = _extract_proc_id(line)
+        if pid:
+            last = _seen_failed_auth_by_pid.get(("su", pid), 0.0)
+            if now - last < 5:
+                return
+            _seen_failed_auth_by_pid[("su", pid)] = now
+        if _mark_seen_once("su", "AUTH_FAIL", msg, now):
+            return
         log_event("AUTH_FAIL", "su", msg, "MEDIUM")
         detect_su_failure(user, now)
         return
 
-    # ── su: FAILED SU log line ───────────────────────────────
+    # ── su: FAILED SU line ────────────────────────────────────
     if "FAILED SU" in line:
         m = RE_SU_FAIL_LOG.search(line)
         if m:
             target, actor = m.group(1), m.group(2)
             msg = f"Failed su by '{actor}' to '{target}'"
             print("[SU FAIL]", msg)
+            if _mark_seen_once("su", "AUTH_FAIL", msg, now):
+                return
             log_event("AUTH_FAIL", "su", msg, "MEDIUM")
             detect_su_failure(actor, now)
         return
 
-    # ── su: success ──────────────────────────────────────────
+    # ── su: success ───────────────────────────────────────────
     if "Successful su" in line:
         m = RE_SU_SUCCESS.search(line)
         if m:
             msg = f"Successful su to '{m.group(1)}' by '{m.group(2)}'"
             print("[SU SUCCESS]", msg)
+            if _mark_seen_once("su", "AUTH_SUCCESS", msg, now):
+                return
             log_event("AUTH_SUCCESS", "su", msg, "LOW")
         return
 
-    # ── Generic PAM failure (login, screensaver, etc.) ───────
-    if "pam_unix" in line and "authentication failure" in line:
+    # ── Generic PAM failure (not sudo) ────────────────────────
+    if "pam_unix" in line and "authentication failure" in line and "sudo" not in line:
         m = RE_PAM_FAIL.search(line)
         if m:
             service, user = m.group(1), m.group(2)
-            # Skip sudo — already handled above
-            if service.startswith("sudo"):
-                return
-            msg = f"PAM auth failure for '{user}' via {service}"
-            print("[AUTH FAIL]", msg)
-            log_event("AUTH_FAIL", "pam", msg, "MEDIUM")
+            if not service.startswith("sudo"):
+                msg = f"PAM auth failure for '{user}' via {service}"
+                print("[AUTH FAIL]", msg)
+                if _mark_seen_once("pam", "AUTH_FAIL", msg, now):
+                    return
+                log_event("AUTH_FAIL", "pam", msg, "MEDIUM")
 
 
 # ══════════════════════════════════════════════════════════
-#  SOURCE 1 — journalctl -f
-#  Catches: SSH, sudo (PAM), sudo COMMAND lines
+#  SOURCE 1 — journalctl -f  (SSH + sudo on Kali)
 # ══════════════════════════════════════════════════════════
 
 def monitor_journal():
@@ -220,24 +257,18 @@ def monitor_journal():
 
     print("[*] JournalMonitor: active.")
     for line in proc.stdout:
-        _parse_line(line, time.time(), "journal")
+        _parse_line(line, time.time())
 
 
 # ══════════════════════════════════════════════════════════
-#  SOURCE 2 — /var/log/auth.log
-#
-#  WHY THIS IS NEEDED:
-#  On Kali, `su` wrong password events go to auth.log via
-#  rsyslog — they do NOT appear in journalctl at all.
-#  This is the ONLY reliable source for su PAM failures.
-#
-#  Run setup_logging.sh first to enable rsyslog.
+#  SOURCE 2 — /var/log/auth.log  (su failures on Kali)
+#  Requires rsyslog. Run setup_logging.sh first.
 # ══════════════════════════════════════════════════════════
 
 def monitor_auth_log():
     AUTH_LOG = "/var/log/auth.log"
     if not os.path.exists(AUTH_LOG):
-        print("[WARN] /var/log/auth.log missing — su failures won't be captured.")
+        print("[WARN] /var/log/auth.log missing — su PAM failures won't be captured.")
         print("[WARN] Run: sudo bash setup_logging.sh")
         return
 
@@ -254,22 +285,20 @@ def monitor_auth_log():
         return
 
     for line in proc.stdout:
-        _parse_line(line, time.time(), "auth.log")
+        _parse_line(line, time.time())
 
 
 # ══════════════════════════════════════════════════════════
-#  SOURCE 3 — /proc watcher for su/sudo
-#
-#  Detects su/sudo process invocations directly.
-#  Acts as a guaranteed fallback when journal/auth.log miss
-#  an event. Logs every invocation to DB immediately.
+#  SOURCE 3 — /proc watcher  (su/sudo — always works)
+#  Detects invocations even when journald misses them.
+#  FIX: now calls log_event() so events appear in dashboard.
 # ══════════════════════════════════════════════════════════
 
 _seen_sudo_pids = set()
 
 
 def monitor_sudo_proc():
-    print("[*] ProcMonitor: watching for su/sudo processes...")
+    print("[*] ProcMonitor: watching /proc for su/sudo...")
 
     while True:
         try:
@@ -291,14 +320,12 @@ def monitor_sudo_proc():
 
                     _seen_sudo_pids.add(pid)
 
-                    # Read cmdline
                     try:
                         with open(f"/proc/{pid}/cmdline", "rb") as f:
                             cmdline = f.read().decode(errors="replace").replace("\x00", " ").strip()
                     except Exception:
                         cmdline = comm
 
-                    # Read username from UID
                     try:
                         uid = None
                         with open(f"/proc/{pid}/status") as f:
@@ -312,6 +339,8 @@ def monitor_sudo_proc():
 
                     msg = f"{comm} invoked by '{username}' | cmd: {cmdline}"
                     print(f"[{comm.upper()} DETECTED]", msg)
+
+                    # FIX: log to DB so it appears in dashboard
                     log_event("PRIV_ESC", comm, msg, "MEDIUM")
 
                 except (ValueError, PermissionError, FileNotFoundError):
@@ -333,11 +362,11 @@ def monitor_sudo_proc():
 if __name__ == "__main__":
 
     threads = [
-        threading.Thread(target=monitor_processes,  daemon=True, name="ProcessMonitor"),
-        threading.Thread(target=monitor_files,       daemon=True, name="FileMonitor"),
-        threading.Thread(target=monitor_journal,     daemon=True, name="JournalMonitor"),
-        threading.Thread(target=monitor_auth_log,    daemon=True, name="AuthLogMonitor"),
-        threading.Thread(target=monitor_sudo_proc,   daemon=True, name="SudoProcMonitor"),
+        threading.Thread(target=monitor_processes, daemon=True, name="ProcessMonitor"),
+        threading.Thread(target=monitor_files,     daemon=True, name="FileMonitor"),
+        threading.Thread(target=monitor_journal,   daemon=True, name="JournalMonitor"),
+        threading.Thread(target=monitor_auth_log,  daemon=True, name="AuthLogMonitor"),
+        threading.Thread(target=monitor_sudo_proc, daemon=True, name="SudoProcMonitor"),
     ]
 
     for t in threads:

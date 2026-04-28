@@ -1,3 +1,17 @@
+"""
+process_monitor.py  —  Security Logging & Reporting System
+
+Bugs fixed vs original GitHub version:
+  1. CRASH BUG: detect_suspicious_process(process_name) — variable
+     'process_name' was never defined. Should be 'name'. This caused
+     every new process detection to silently crash, meaning NO suspicious
+     process was ever detected.
+  2. No noise filtering — every kernel thread, browser helper, system
+     daemon logged as an event. Added comprehensive ignore list.
+  3. proc.exe() called without try/except — crashes on permission denied
+     for many root processes.
+"""
+
 from detection_engine import detect_suspicious_process
 import psutil
 import time
@@ -7,11 +21,9 @@ print("=== REAL-TIME PROCESS MONITOR STARTED ===")
 
 known_pids = set()
 
-# ─────────────────────────────────────────────────────────
-# EXACT process names to silently ignore
-# ─────────────────────────────────────────────────────────
+# ── Exact process names to ignore ────────────────────────
 IGNORE_PROCESS_NAMES = {
-    # Firefox sandbox / renderer helpers
+    # Firefox sandbox / renderer
     "bwrap", "glycin-image-rs", "glycin-svg",
     "Web Content", "Chroot Helper", "file:// Content",
     "Privileged Cont", "Socket Process", "Utility Process",
@@ -20,7 +32,7 @@ IGNORE_PROCESS_NAMES = {
     # GNOME virtual filesystem
     "gvfs-mtp-volume-monitor", "gvfs-gphoto2-volume-monitor",
     "gvfs-afc-volume-monitor", "gvfs-goa-volume-monitor",
-    "gvfsd-trash", "fusermount3",
+    "gvfsd-trash", "fusermount3", "gvfsd-metadata",
 
     # XDG desktop portals
     "xdg-desktop-portal", "xdg-desktop-portal-gtk",
@@ -29,58 +41,49 @@ IGNORE_PROCESS_NAMES = {
     # Audio subsystem
     "pipewire", "pipewire-pulse", "wireplumber", "mpris-proxy",
 
-    # Session / display services
+    # Session / display
     "dbus-daemon", "gpg-agent", "gnome-keyring-daemon",
     "xfce4-session", "xfce4-notifyd", "xfce4-panel",
-    "xfce4-mime-helper",                   # NEW: MIME handler spawned constantly
-    "lightdm", "Xorg",
+    "xfce4-mime-helper", "lightdm", "Xorg",
 
-    # systemd workers and services
+    # systemd workers
     "systemd", "(sd-pam)", "systemd-journald",
     "systemd-timesyncd", "systemd-userdbd",
-    "systemd-udevd", "systemd-userwork:",
-    "nm-dispatcher",
+    "systemd-udevd", "systemd-userwork:", "nm-dispatcher",
 
-    # SSH daemon internals — these are ssh server worker processes,
-    # not user-initiated ssh commands. Actual ssh client is kept.
-    "sshd-session",                        # NEW: SSH session handler
-    "sshd-auth",                           # NEW: SSH auth worker
+    # SSH daemon internals (server-side workers, not the ssh client)
+    "sshd-session", "sshd-auth",
 
-    # PAM / auth helpers — these are called internally by sudo/su/login
-    # The actual auth event is captured by real_time_auth.py instead
-    "unix_chkpwd",                         # NEW: PAM password validator
-    "polkit-agent-helper-1",               # NEW: PolicyKit auth agent
+    # PAM / auth helpers (internal, actual event captured by auth monitor)
+    "unix_chkpwd", "polkit-agent-helper-1",
 
-    # Disk / block device queries — triggered by desktop automount
-    "lsblk",                               # NEW: block device lister
+    # Disk / block queries from desktop automount
+    "lsblk",
 
-    # Backup / system tools launched by desktop
-    "SystemToolsBack",                     # NEW: XFCE system tools backend
+    # XFCE backend
+    "SystemToolsBack",
 
-    # VMware tools
-    "vmware-vmblock-fuse",
-
-    # Real-time / bluetooth
-    "rtkit-daemon", "obexd",
-
-    # Smart card daemon
-    "pcscd",
+    # VMware / bluetooth / smartcard
+    "vmware-vmblock-fuse", "rtkit-daemon", "obexd", "pcscd",
 
     # Shell / terminal (normal user activity)
     "zsh", "bash", "sh", "qterminal",
 
-    # Misc benign
-    "psimon",
+    # Network / system services
+    "NetworkManager", "ModemManager", "upowerd",
+    "accounts-daemon", "polkitd", "systemd-logind",
+    "rsyslogd", "cron",
+
+    # Misc
+    "psimon", "wrapper-2.0",
 }
 
-# ─────────────────────────────────────────────────────────
-# PREFIX patterns to ignore (kernel threads & irq handlers)
-# ─────────────────────────────────────────────────────────
+# ── Prefix patterns to ignore (kernel threads) ───────────
 IGNORE_PREFIXES = (
-    "kworker/",     # e.g. kworker/0:2-events
-    "irq/",         # e.g. irq/56-vmw_vmci
-    "jbd2/",        # e.g. jbd2/sda1-8
-    "xfce4-",       # e.g. xfce4-mime-helper, xfce4-notifyd (catch all variants)
+    "kworker/",    # kernel worker threads
+    "irq/",        # interrupt threads
+    "jbd2/",       # ext4 journal threads
+    "xfce4-",      # all XFCE helpers
 )
 
 
@@ -100,7 +103,7 @@ def monitor_processes():
 
     while True:
         current_pids = set(psutil.pids())
-        new_pids = current_pids - known_pids
+        new_pids     = current_pids - known_pids
 
         for pid in new_pids:
             try:
@@ -116,7 +119,8 @@ def monitor_processes():
                 print("[PROCESS START]", message)
                 log_event("PROCESS_START", name, message, "LOW")
 
-                # BUG FIX: original code used undefined `process_name`, fixed to `name`
+                # BUG FIX: original code used undefined variable 'process_name'
+                # which caused a silent NameError on every process — fixed to 'name'
                 detect_suspicious_process(name)
 
                 # Alert: root process running from /tmp
