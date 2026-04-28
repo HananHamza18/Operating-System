@@ -9,7 +9,6 @@
 </head>
 <body>
 
-<!-- ── Navigation ── -->
 <nav class="nav">
     <a href="/" class="nav-brand">SOC MONITOR</a>
     <a href="/" class="nav-link active">Dashboard</a>
@@ -17,18 +16,17 @@
     <a href="/processes/" class="nav-link">Processes</a>
     <a href="/filesystem/" class="nav-link">Filesystem</a>
     <a href="/timeline/" class="nav-link">Timeline</a>
+    <a href="/report/" class="nav-link">Report</a>
 </nav>
 
-<!-- ── Page ── -->
 <div class="page">
 
     <div class="page-header">
-        <h1 class="page-title"><span>▸</span> SECURITY OVERVIEW</h1>
+        <h1 class="page-title"><span>&#9656;</span> SECURITY OVERVIEW</h1>
         <span class="page-subtitle">REAL-TIME THREAT MONITORING</span>
         <span class="live-dot" style="margin-left:auto;">LIVE</span>
     </div>
 
-    <!-- ── Stat Cards ── -->
     <div class="cards-grid">
 
         <div class="card threat">
@@ -53,12 +51,16 @@
             <div class="card-label">Severity Breakdown</div>
             {% for s in severity_counts %}
             <div class="severity-row">
-                <span class="text-{{ s.severity|lower }}" style="font-size:10px;width:50px;">{{ s.severity }}</span>
+                <span class="text-{{ s.severity|lower }}" style="font-size:10px;width:50px;">
+                    {{ s.severity }}
+                </span>
                 <div class="severity-bar-track">
                     <div class="severity-bar-fill {{ s.severity }}"
                          style="width: {{ s.percent|default:'0' }}%"></div>
                 </div>
-                <span class="text-dim" style="font-size:11px;min-width:24px;text-align:right;">{{ s.count }}</span>
+                <span class="text-dim" style="font-size:11px;min-width:24px;text-align:right;">
+                    {{ s.count }}
+                </span>
             </div>
             {% endfor %}
         </div>
@@ -66,19 +68,23 @@
         <div class="card">
             <div class="card-label">Quick Access</div>
             <div class="quick-links">
-                <a href="/auth/"       class="quick-link"><span class="icon">🔐</span> Auth Events</a>
-                <a href="/processes/"  class="quick-link"><span class="icon">⚙️</span> Processes</a>
-                <a href="/filesystem/" class="quick-link"><span class="icon">📁</span> Filesystem</a>
-                <a href="/timeline/"   class="quick-link"><span class="icon">📊</span> Timeline</a>
+                <a href="/auth/"           class="quick-link"><span class="icon">[A]</span> Auth Events</a>
+                <a href="/processes/"      class="quick-link"><span class="icon">[P]</span> Processes</a>
+                <a href="/filesystem/"     class="quick-link"><span class="icon">[F]</span> Filesystem</a>
+                <a href="/timeline/"       class="quick-link"><span class="icon">[T]</span> Timeline</a>
+                <a href="/report/"         class="quick-link"><span class="icon">[R]</span> Security Report</a>
+                <a href="/report/download/" class="quick-link"
+                   style="border-color:var(--accent-cyan);color:var(--accent-cyan);">
+                    <span class="icon">&#8659;</span> Download PDF
+                </a>
             </div>
         </div>
 
     </div>
 
-    <!-- ── Latest Alerts Table ── -->
     <div class="table-panel">
         <div class="table-panel-header">
-            <span class="table-panel-title">🚨 Latest High Severity Alerts</span>
+            <span class="table-panel-title">Latest High Severity Alerts</span>
             <span class="table-panel-count">{{ latest_alerts|length }} alerts</span>
         </div>
         <table>
@@ -106,16 +112,12 @@
 </div>
 
 <script>
-    // Auto-refresh every 30 seconds
     setTimeout(() => location.reload(), 30000);
-
-    // Mark active nav link
     document.querySelectorAll('.nav-link').forEach(link => {
-        if (link.getAttribute('href') === window.location.pathname) {
+        if (link.getAttribute('href') === window.location.pathname)
             link.classList.add('active');
-        } else {
+        else
             link.classList.remove('active');
-        }
     });
 </script>
 </body>

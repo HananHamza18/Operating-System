@@ -1,0 +1,239 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Report — SOC</title>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+</head>
+<body>
+
+<nav class="nav">
+    <a href="/" class="nav-brand">SOC MONITOR</a>
+    <a href="/" class="nav-link">Dashboard</a>
+    <a href="/auth/" class="nav-link">Auth</a>
+    <a href="/processes/" class="nav-link">Processes</a>
+    <a href="/filesystem/" class="nav-link">Filesystem</a>
+    <a href="/timeline/" class="nav-link">Timeline</a>
+    <a href="/report/" class="nav-link active">Report</a>
+</nav>
+
+<div class="page">
+
+    <div class="page-header">
+        <h1 class="page-title"><span>[ RPT ]</span> SECURITY REPORT</h1>
+        <span class="page-subtitle">AUTOMATED INCIDENT SUMMARY</span>
+        <span class="live-dot" style="margin-left:auto;">LIVE</span>
+    </div>
+
+    <a href="/" class="back-link">← Back to Dashboard</a>
+
+    <!-- Download button -->
+    <div style="margin-bottom: 24px; display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+        <a href="/report/download/" style="
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: var(--accent-cyan);
+            color: var(--bg-void);
+            font-family: var(--font-mono);
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            padding: 10px 24px;
+            border-radius: 3px;
+            text-decoration: none;
+            transition: opacity 0.2s;
+        " onmouseover="this.style.opacity='0.85'"
+           onmouseout="this.style.opacity='1'">
+            &#8659; Download PDF Report
+        </a>
+        <span class="text-dim" style="font-size:11px;">
+            Generated: {{ generated_at }}
+        </span>
+    </div>
+
+    <!-- Threat Summary Cards -->
+    <div class="cards-grid" style="margin-bottom:28px;">
+
+        <div class="card {% if threat_level == 'HIGH' %}threat{% endif %}">
+            <div class="card-label">Threat Score</div>
+            <div class="card-value {{ threat_level }}">{{ threat_score }}</div>
+            <div class="card-sub text-{{ threat_level|lower }}">{{ threat_level }} RISK</div>
+        </div>
+
+        <div class="card">
+            <div class="card-label">Total Events</div>
+            <div class="card-value">{{ total_events }}</div>
+        </div>
+
+        <div class="card">
+            <div class="card-label">High Alerts</div>
+            <div class="card-value HIGH">{{ total_alerts }}</div>
+        </div>
+
+        <div class="card">
+            <div class="card-label">Severity Breakdown</div>
+            {% for row in severity_counts %}
+            <div class="severity-row">
+                <span class="text-{{ row.severity|lower }}" style="font-size:10px;width:55px;">
+                    {{ row.severity }}
+                </span>
+                <div class="severity-bar-track">
+                    <div class="severity-bar-fill {{ row.severity }}"
+                         style="width:{{ row.percent|default:'0' }}%"></div>
+                </div>
+                <span class="text-dim" style="font-size:11px;min-width:24px;text-align:right;">
+                    {{ row.count }}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+
+    </div>
+
+    <!-- Section 1: Event Type Breakdown -->
+    <div class="table-panel" style="margin-bottom:24px;">
+        <div class="table-panel-header">
+            <span class="table-panel-title">Event Type Breakdown</span>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Event Type</th>
+                    <th>Count</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for row in event_types %}
+                <tr>
+                    <td class="text-cyan" style="font-size:11px;letter-spacing:1px;">
+                        {{ row.event_type }}
+                    </td>
+                    <td>{{ row.count }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="2" class="empty">// no data</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Section 2: Top Failed Logins -->
+    <div class="table-panel" style="margin-bottom:24px;">
+        <div class="table-panel-header">
+            <span class="table-panel-title">Top Failed Login Attempts</span>
+            <span class="table-panel-count">{{ failed_logins|length }} entries</span>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Message</th>
+                    <th>Count</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for item in failed_logins %}
+                <tr class="alert-row">
+                    <td class="text-high">{{ item.message }}</td>
+                    <td class="text-high">{{ item.count }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="2" class="empty">// no failed logins recorded</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Section 3: Recent High Alerts -->
+    <div class="table-panel" style="margin-bottom:24px;">
+        <div class="table-panel-header">
+            <span class="table-panel-title">Recent High Severity Alerts</span>
+            <span class="table-panel-count">{{ high_alerts|length }} alerts</span>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Type</th>
+                    <th>Source</th>
+                    <th>Message</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for alert in high_alerts %}
+                <tr class="alert-row">
+                    <td class="ts">{{ alert.timestamp }}</td>
+                    <td><span class="text-cyan" style="font-size:11px;">{{ alert.event_type }}</span></td>
+                    <td><span class="badge {{ alert.source }}">{{ alert.source }}</span></td>
+                    <td class="text-high">{{ alert.message }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="4" class="empty">// no high severity alerts</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Section 4: Recent Auth Events -->
+    <div class="table-panel" style="margin-bottom:24px;">
+        <div class="table-panel-header">
+            <span class="table-panel-title">Recent Authentication Events</span>
+            <span class="table-panel-count">{{ auth_events|length }} entries</span>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Type</th>
+                    <th>Source</th>
+                    <th>Message</th>
+                    <th>Severity</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for ev in auth_events %}
+                <tr {% if ev.severity == 'HIGH' %}class="alert-row"{% endif %}>
+                    <td class="ts">{{ ev.timestamp }}</td>
+                    <td><span class="text-cyan" style="font-size:11px;">{{ ev.event_type }}</span></td>
+                    <td><span class="badge {{ ev.source }}">{{ ev.source }}</span></td>
+                    <td>{{ ev.message }}</td>
+                    <td><span class="pill {{ ev.severity }}">{{ ev.severity }}</span></td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="5" class="empty">// no authentication events</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Section 5: Recommendations -->
+    <div class="table-panel" style="margin-bottom:24px;">
+        <div class="table-panel-header">
+            <span class="table-panel-title">Recommendations</span>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Recommendation</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for rec in recommendations %}
+                <tr {% if '[HIGH]' in rec %}class="alert-row"{% endif %}>
+                    <td class="ts" style="width:40px;">{{ forloop.counter }}</td>
+                    <td>{{ rec }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="2" class="empty">// no recommendations</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+</div>
+</body>
+</html>

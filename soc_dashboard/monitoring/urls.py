@@ -2,9 +2,12 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
-    path("", views.dashboard, name="dashboard"),
-    path("auth/", views.auth_events, name="auth_events"),
-    path("processes/", views.process_events, name="process_events"),
-    path("filesystem/", views.filesystem_events, name="filesystem_events"),
-    path("timeline/", views.timeline, name="timeline"),
+    path("",             views.dashboard,       name="dashboard"),
+    path("auth/",        views.auth_events,     name="auth_events"),
+    path("processes/",   views.process_events,  name="process_events"),
+    path("filesystem/",  views.filesystem_events, name="filesystem_events"),
+    path("timeline/",    views.timeline,        name="timeline"),
+    path("alerts/",      views.alerts,          name="alerts"),
+    path("report/",      views.report,          name="report"),
+    path("report/download/", views.report_download, name="report_download"),
 ]

@@ -17,3 +17,10 @@ scan.xml
 
 # OS files
 .DS_Store
+
+# Reports
+*.pdf
+
+# XML scans
+*.xml
+
